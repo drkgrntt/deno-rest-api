@@ -1,60 +1,96 @@
-import { v4 } from 'https://deno.land/std/uuid/mod.ts'
+import { Client } from 'https://deno.land/x/postgres/mod.ts'
 import { Product } from '../types.ts'
+import { dbCreds } from '../config.ts'
 
-
-let products: Product[] = [
-  {
-    id: "1",
-    name: "Product One",
-    description: "This is product one",
-    price: 29.99
-  },
-  {
-    id: "2",
-    name: "Product Two",
-    description: "This is product two",
-    price: 39.99
-  },
-  {
-    id: "3",
-    name: "Product Three",
-    description: "This is product three",
-    price: 59.99
-  }
-]
+// Init client
+const client = new Client(dbCreds)
 
 // @desc    Get all products
 // @route   GET /api/v1/products
-const getProducts = ({ response }: { response: any }) => {
-  response.body = {
-    success: true,
-    data: products
+const getProducts = async ({ response }: { response: any }) => {
+
+  try {
+
+    await client.connect()
+    const query = "SELECT * FROM products;"
+
+    const result = await client.query(query)
+
+    const products = result.rows.map(product => {
+
+      const formattedProduct: any = {}
+      result.rowDescription.columns.forEach((element, i) => {
+        formattedProduct[element.name] = product[i]
+      })
+
+      return formattedProduct
+    })
+
+    response.status = 201
+    response.body = {
+      success: true,
+      data: products
+    }
+
+  } catch (err) {
+    response.status = 500
+    response.body = {
+      success: false,
+      message: err.toString()
+    }
+  } finally {
+    await client.end()
   }
 }
 
 // @desc    Get single product
 // @route   GET /api/v1/product/:id
-const getProduct = ({ params, response }: { params: { id: string }, response: any }) => {
-  const product: Product | undefined = products.find(p => p.id === params.id)
+const getProduct = async ({ params, response }: { params: { id: string }, response: any }) => {
+  try {
 
-  if (product) {
-    response.status = 200
+    await client.connect()
+    const query = "SELECT * FROM products WHERE id = $1;"
+
+    const result = await client.query(query, params.id)
+
+    if (result.rows.toString() === '') {
+      response.status = 404
+      response.body = {
+        success: false,
+        message: `No product with the id of ${params.id} was found`
+      }
+      return
+    }
+
+    const product: any = {}
+
+    result.rows.forEach(row => {
+      result.rowDescription.columns.forEach((element, i) => {
+        product[element.name] = row[i]
+      })
+    })
+
+    response.status = 201
     response.body = {
       success: true,
       data: product
     }
-  } else {
-    response.status = 404
+
+  } catch (err) {
+    response.status = 500
     response.body = {
       success: false,
-      message: 'No product found'
+      message: err.toString()
     }
+  } finally {
+    await client.end()
   }
 }
 
 // @desc    Add product
 // @route   POST /api/v1/products
 const addProduct = async ({ request, response }: { request: any, response: any }) => {
+
   const body = await request.body()
 
   if (!request.hasBody) {
@@ -63,69 +99,108 @@ const addProduct = async ({ request, response }: { request: any, response: any }
       success: false,
       message: 'No data'
     }
-  } else {
+    return
+  }
+
+  try {
+    await client.connect()
+    const query = "INSERT INTO products(name, description, price) VALUES($1, $2, $3);"
     const product: Product = await body.value
-    console.log(body.value)
-    product.id = v4.generate()
-    products.push(product)
+
+    const result = await client.query(query, product.name, product.description, product.price)
+
     response.status = 201
     response.body = {
       success: true,
       data: product
     }
+
+  } catch (err) {
+    response.status = 500
+    response.body = {
+      success: false,
+      message: err.toString()
+    }
+  } finally {
+    await client.end()
   }
 }
 
 // @desc    Update product
 // @route   PUT /api/v1/products/:id
 const updateProduct = async ({ params, request, response }: { params: { id: string }, request: any, response: any }) => {
-  const product: Product | undefined = products.find(p => p.id === params.id)
 
-  if (!product) {
-    response.status = 404
+  await getProduct({ params: { id: params.id }, response })
+
+  if (response.status === 404) {
+    return
+  }
+
+  const body = await request.body()
+
+  if (!request.hasBody) {
+    response.status = 400
     response.body = {
       success: false,
-      message: 'No product found'
+      message: 'No data'
     }
-  } else {
-    const body = await request.body()
+    return
+  }
 
-    const updateData: { name?: string, description?: string, price?: number } = await body.value
+  try {
+    await client.connect()
+    const query = "UPDATE Products SET name=$1, description=$2, price=$3 WHERE id=$4;"
+    const product: Product = await body.value
 
-    products = products.map(p => {
-      if (params.id === p.id) {
-        p = { ...p, ...updateData }
-      }
-      return p
-    })
+    await client.query(query, product.name, product.description, product.price, params.id)
 
     response.status = 200
     response.body = {
       success: true,
-      data: products
+      data: product
     }
+
+  } catch (err) {
+    response.status = 500
+    response.body = {
+      success: false,
+      message: err.toString()
+    }
+  } finally {
+    await client.end()
   }
 }
 
 // @desc    Delete product
 // @route   DELETE /api/v1/products/:id
-const deleteProduct = ({ params, response }: { params: { id: string }, response: any }) => {
+const deleteProduct = async ({ params, response }: { params: { id: string }, response: any }) => {
 
-  const product: Product | undefined = products.find(p => p.id === params.id)
+  await getProduct({ params: { id: params.id }, response })
 
-  if (!product) {
-    response.status = 404
-    response.body = {
-      success: false,
-      message: 'No product found'
-    }
-  } else {
-    products = products.filter(p => p.id !== params.id)
+  if (response.status === 404) {
+    return
+  }
 
+  try {
+
+    await client.connect()
+    const query = "DELETE FROM products WHERE id = $1;"
+    await client.query(query, params.id)
+
+    response.status = 204
     response.body = {
       success: true,
-      message: "Product removed"
+      message: `Product with id ${params.id} has been deleted.`
     }
+
+  } catch (err) {
+    response.status = 500
+    response.body = {
+      success: false,
+      message: err.toString()
+    }
+  } finally {
+    await client.end()
   }
 }
 
